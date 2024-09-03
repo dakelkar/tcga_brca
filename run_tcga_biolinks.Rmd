@@ -16,35 +16,47 @@ if (interactive() && Sys.getenv("RSTUDIO") == "") {
 }
 knitr::opts_chunk$set(echo = TRUE)
 library(lintr)
-
 # Set up custom linter
+
 custom_linters <- list(
   assignment_linter = NULL,  # Disable assignment linter
-  object_name_linter = lintr::object_name_linter(styles = c("snake_case", "camelCase")),
-  line_length_linter = lintr::line_length_linter(120),
+  object_name_linter =
+    lintr::object_name_linter(styles = c("snake_case", "camelCase")),
+  line_length_linter = lintr::line_length_linter(120)
   # Add more custom linters as needed
 )
-
 # Run the linter on the current file
-lint(filename = knitr::current_input(), linters = custom_linters)
+tryCatch(
+  lint(filename = knitr::current_input(), linters = custom_linters),
+  error = function(e) {
+    message("Linting failed: ", e$message)
+  }
+)
 ```
 
 ```{r bioconductor}
+
 if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
+  install.packages("BiocManager")
 BiocManager::install("TCGAbiolinks")
 ```
 
-```{r import pkgs}
+```{r style document, include=FALSE}
+require(styler)
+styler::style_file(knitr::current_input())
+```
+
+```{r import pkgs, results='markup'}
 require(TCGAbiolinks)
 require(dplyr)
 require(tidyr)
+require(styler)
 if (!requireNamespace("SummarizedExperiment", quietly = TRUE))
-    BiocManager::install("SummarizedExperiment")
+  BiocManager::install("SummarizedExperiment")
 library(SummarizedExperiment)
 ```
 
-```{r query tcga-brca}
+```{r query tcga-brca, results='markup'}
 # Query TCGA-BRCA RNA-seq data
 query <- GDCquery(
   project = "TCGA-BRCA",
@@ -63,8 +75,7 @@ data <- GDCprepare(query)
 head(data)
 
 ```
-
-```{r parse data object, echo=True}
+```{r parse data object, echo=True, results='markup', message = FALSE, warning = FALSE}
 print(class(data))
 # Access components of SummarizedExperiment object 'data'
 
@@ -80,19 +91,15 @@ for (assay_name in assay_names) {
   assay_data[[assay_name]] <- assay(data, assay_name)
 }
 
+
 # Print the names of the available assays
 print(paste("Available assays:", paste(assay_names, collapse = ", ")))
-# print("Dimensions of assay data:")
-# print(dim(assay_data))
-# print("First few rows and columns of assay data:")
-# print(assay_data[1:5, 1:5])
 
 # Access the feature data (gene information)
 feature_data <- rowData(data)
 print("First few rows of feature data:")
-print(head(feature_data))
 
-# Access the sample data (clinical information)
+print(head(feature_data))
 sample_data <- colData(data)
 print("First few rows of sample data:")
 print(head(sample_data))
@@ -103,17 +110,38 @@ print("Metadata:")
 print(metadata)
 
 ```
+# Access the sample data (clinical information)
+
+```{r treatment data,  results='markup', message = FALSE, warning = FALSE}
+# Extract treatments from sample_data
+treatment <- sample_data$treatments
+
+# Check if treatment is not NULL and has elements
+if (!is.null(treatment) && length(treatment) > 0) {
+  tryCatch({
+    tm <- data.table::rbindlist(treatment, use.names = TRUE, fill = TRUE)
+    print(head(tm))
+  }, error = function(e) {
+    cat("Error in rbindlist:", conditionMessage(e), "\n")
+    cat("Structure of treatment:\n")
+    str(treatment)
+  })
+} else {
+  cat("Treatment data is empty or NULL\n")
+  print(treatment)
+}
+```
 
 ```{r create rnaseq output object}
+  # Try to bind the list into a data table
 # Create gene ID and HGNC ID mapping
-gene_id_hgnc_id <- data.framfpkme(
+gene_id_hgnc_id <- data.frame(
   gene_id = feature_data$gene_id,
   gene_name = feature_data$gene_name,
   hgnc_id = gsub("HGNC:", "", feature_data$hgnc_id)
 )
 
 # Convert list columns to string in sample_data
-col_list <- sapply(sample_data, is.list)
 sample_data[col_list] <- lapply(sample_data[col_list], 
                                 function(x) sapply(x, paste, collapse = '; '))
 
@@ -126,6 +154,7 @@ if(any(sapply(sample_data, is.list))) {
 }
 
 # Display the structure of sample_data to verify changes
+col_list <- sapply(sample_data, is.list)
 str(sample_data)
 
 # Process FPKM-UQ data
@@ -154,8 +183,8 @@ tpm_dat <- merge(tpm_dat, as.data.frame(sample_data), by = "barcode")
 
 # Display the first few rows of each data type
 cat("FPKM-UQ data:\n")
-print(head(fpkm_dat))
 cat("\nRaw counts data:\n")
+print(head(fpkm_dat))
 print(head(raw_counts_dat))
 cat("\nTPM data:\n")
 print(head(tpm_dat))
@@ -197,12 +226,8 @@ cat("CSV files have been created for gene_id_hgnc_id_mapping, fpkm_data_with_cli
 feature_data, sample_data, and metadata (if applicable)")
 ```
 
-```{r treatment data}
-treatment = sample_data$treatments
-tm = data.table::rbindlist(treatment, use.names = TRUE)
-head(tm)
-```
-```{r filter fpkm data}
+
+```{r filter fpkm data, }
 # fitler fpkm data for different sample_types
 # Filter and write FPKM data
 pt_fpkm = fpkm_dat %>% dplyr::filter(sample_type == 'Primary Tumor') %>% select(-'treatments')
@@ -233,8 +258,6 @@ write.csv(mets_tpm, 'tpm_with_clinical_data_metastasis.csv', row.names = FALSE)
 
 ```
 ```{r treatment data to csv}
-library(TCGAbiolinks)
-
 # Replace "TCGA-BRCA" with your project of interest
 clinical_data <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
 # View the column names to identify those related to treatment
@@ -253,48 +276,62 @@ write.csv(treatment_data, 'treatement_data.csv')
 clinical_case_ids <- clinical_data$submitter_id
 
 # Function to process and filter data
-process_and_filter_data <- function(data, clinical_case_ids, sample_type) {
+process_and_filter_data <- function(data, clinical_case_ids) {
   data$case_id <- substr(data$barcode, 1, 12)
   filtered_data <- data %>%
     filter(case_id %in% clinical_case_ids) %>%
-    filter(sample_type == sample_type) %>%
-    select(-'treatments')
+    group_by(case_id) %>%
+    summarise(across(starts_with("ENSG"), ~ mean(.x, na.rm = TRUE)))
   return(filtered_data)
 }
 
 # Process FPKM data
-fpkm_pt_filtered <- process_and_filter_data(fpkm_dat, clinical_case_ids, 'Primary Tumor')
-fpkm_norm_filtered <- process_and_filter_data(fpkm_dat, clinical_case_ids, 'Solid Tissue Normal')
-fpkm_mets_filtered <- process_and_filter_data(fpkm_dat, clinical_case_ids, 'Metastatic')
+fpkm_filtered <- process_and_filter_data(fpkm_dat, clinical_case_ids)
+fpkm_pt_filtered <- fpkm_filtered %>% filter(sample_type == 'Primary Tumor')
+fpkm_norm_filtered <- fpkm_filtered %>%
+filter(sample_type == 'Solid Tissue Normal')
+fpkm_mets_filtered <- fpkm_filtered %>% filter(sample_type == 'Metastatic')
 
 # Process raw counts data
-counts_pt_filtered <- process_and_filter_data(raw_counts_dat, clinical_case_ids, 'Primary Tumor')
-counts_norm_filtered <- process_and_filter_data(raw_counts_dat, clinical_case_ids, 'Solid Tissue Normal')
-counts_mets_filtered <- process_and_filter_data(raw_counts_dat, clinical_case_ids, 'Metastatic')
+raw_counts_filtered <- process_and_filter_data(raw_counts_dat,
+clinical_case_ids)
+counts_pt_filtered <- raw_counts_filtered %>% filter(sample_type == 'Primary Tumor')
+counts_norm_filtered <- raw_counts_filtered %>% filter(sample_type == 'Solid Tissue Normal')
+counts_mets_filtered <- raw_counts_filtered %>% filter(sample_type == 'Metastatic')
 
 # Process TPM data
-tpm_pt_filtered <- process_and_filter_data(tpm_dat, clinical_case_ids, 'Primary Tumor')
-tpm_norm_filtered <- process_and_filter_data(tpm_dat, clinical_case_ids, 'Solid Tissue Normal')
-tpm_mets_filtered <- process_and_filter_data(tpm_dat, clinical_case_ids, 'Metastatic')
+tpm_filtered <- process_and_filter_data(tpm_dat, clinical_case_ids)
+tpm_pt_filtered <- tpm_filtered %>% filter(sample_type == 'Primary Tumor')
+tpm_norm_filtered <- tpm_filtered %>% 
+filter(sample_type == 'Solid Tissue Normal')
+tpm_mets_filtered <- tpm_filtered %>% filter(sample_type == 'Metastatic')
 
 # Write filtered data to CSV files
 write_filtered_data <- function(data, prefix, sample_type) {
-  write.csv(data, paste0(prefix, "_", gsub(" ", "_", tolower(sample_type)), "_filtered.csv"), row.names = FALSE)
+  write.csv(data, paste0(prefix, "_", gsub(" ", "_", tolower(sample_type)), 
+  "_filtered.csv"), row.names = FALSE)
 }
 
 # Write FPKM data
-write_filtered_data(fpkm_pt_filtered, "fpkm_uq_with_clinical_data", "Primary Tumor")
-write_filtered_data(fpkm_norm_filtered, "fpkm_uq_with_clinical_data", "Solid Tissue Normal")
-write_filtered_data(fpkm_mets_filtered, "fpkm_uq_with_clinical_data", "Metastatic")
+write_filtered_data(fpkm_pt_filtered, "fpkm_uq_with_clinical_data",
+                    "Primary Tumor")
+write_filtered_data(fpkm_norm_filtered, "fpkm_uq_with_clinical_data",
+                    "Solid Tissue Normal")
+write_filtered_data(fpkm_mets_filtered, "fpkm_uq_with_clinical_data",
+                    "Metastatic")
 
 # Write raw counts data
-write_filtered_data(counts_pt_filtered, "raw_counts_with_clinical_data", "Primary Tumor")
-write_filtered_data(counts_norm_filtered, "raw_counts_with_clinical_data", "Solid Tissue Normal")
-write_filtered_data(counts_mets_filtered, "raw_counts_with_clinical_data", "Metastatic")
+write_filtered_data(counts_pt_filtered,
+                    "raw_counts_with_clinical_data", "Primary Tumor")
+write_filtered_data(counts_norm_filtered,
+                    "raw_counts_with_clinical_data", "Solid Tissue Normal")
+write_filtered_data(counts_mets_filtered,
+                    "raw_counts_with_clinical_data", "Metastatic")
 
 # Write TPM data
 write_filtered_data(tpm_pt_filtered, "tpm_with_clinical_data", "Primary Tumor")
-write_filtered_data(tpm_norm_filtered, "tpm_with_clinical_data", "Solid Tissue Normal")
+write_filtered_data(tpm_norm_filtered,
+                    "tpm_with_clinical_data", "Solid Tissue Normal")
 write_filtered_data(tpm_mets_filtered, "tpm_with_clinical_data", "Metastatic")
 
 # Print the number of samples in each category for each data type
@@ -305,10 +342,16 @@ print_sample_counts <- function(data_type, pt, norm, mets) {
   print(paste("Metastatic samples:", nrow(mets)))
 }
 
-print_sample_counts("FPKM", fpkm_pt_filtered, fpkm_norm_filtered, fpkm_mets_filtered)
-print_sample_counts("Raw Counts", counts_pt_filtered, counts_norm_filtered, counts_mets_filtered)
-print_sample_counts("TPM", tpm_pt_filtered, tpm_norm_filtered, tpm_mets_filtered)
+print_sample_counts("FPKM", fpkm_pt_filtered,
+                    fpkm_norm_filtered, fpkm_mets_filtered)
+print_sample_counts("Raw Counts", counts_pt_filtered,
+                    counts_norm_filtered, counts_mets_filtered)
+print_sample_counts("TPM", tpm_pt_filtered,
+                    tpm_norm_filtered, tpm_mets_filtered)
 ```
+
+
+
 
 
 
