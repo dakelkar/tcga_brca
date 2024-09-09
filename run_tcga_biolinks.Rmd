@@ -1,5 +1,5 @@
 ---
-title: "TCGA Biolinks Analysis"
+title: "TCGA Biolinks download and parse data for a specific cancer"
 author: "Devaki Kelkar"
 date: "`r Sys.Date()`"
 output:
@@ -51,15 +51,20 @@ require(TCGAbiolinks)
 require(dplyr)
 require(tidyr)
 require(styler)
+require(data.table)
+require(stringr)
 if (!requireNamespace("SummarizedExperiment", quietly = TRUE))
   BiocManager::install("SummarizedExperiment")
 library(SummarizedExperiment)
 ```
-
+## Define project of interest
+```{r define project of interest}
+project_name <- "TCGA-BRCA"
+````
 ```{r query tcga-brca, results='markup'}
 # Query TCGA-BRCA RNA-seq data
 query <- GDCquery(
-  project = "TCGA-BRCA",
+  project = project_name,
   data.category = "Transcriptome Profiling",
   data.type = "Gene Expression Quantification",
   workflow.type = "STAR - Counts"
@@ -226,40 +231,9 @@ cat("CSV files have been created for gene_id_hgnc_id_mapping, fpkm_data_with_cli
 feature_data, sample_data, and metadata (if applicable)")
 ```
 
-
-```{r filter fpkm data, }
-# fitler fpkm data for different sample_types
-# Filter and write FPKM data
-pt_fpkm = fpkm_dat %>% dplyr::filter(sample_type == 'Primary Tumor') %>% select(-'treatments')
-norm_fpkm = fpkm_dat %>% dplyr::filter(sample_type == 'Solid Tissue Normal') %>% select(-'treatments')
-mets_fpkm = fpkm_dat %>% dplyr::filter(sample_type == 'Metastatic') %>% select(-'treatments')
-
-write.csv(pt_fpkm, 'fpkm_uq_with_clinical_data_primary_tumor.csv', row.names = FALSE)
-write.csv(norm_fpkm, 'fpkm_uq_with_clinical_data_solid_tissue_normal.csv', row.names = FALSE)
-write.csv(mets_fpkm, 'fpkm_uq_with_clinical_data_metastasis.csv', row.names = FALSE)
-
-# Filter and write raw counts data
-pt_counts = raw_counts_dat %>% dplyr::filter(sample_type == 'Primary Tumor') %>% select(-'treatments')
-norm_counts = raw_counts_dat %>% dplyr::filter(sample_type == 'Solid Tissue Normal') %>% select(-'treatments')
-mets_counts = raw_counts_dat %>% dplyr::filter(sample_type == 'Metastatic') %>% select(-'treatments')
-
-write.csv(pt_counts, 'raw_counts_with_clinical_data_primary_tumor.csv', row.names = FALSE)
-write.csv(norm_counts, 'raw_counts_with_clinical_data_solid_tissue_normal.csv', row.names = FALSE)
-write.csv(mets_counts, 'raw_counts_with_clinical_data_metastasis.csv', row.names = FALSE)
-
-# Filter and write TPM data
-pt_tpm = tpm_dat %>% dplyr::filter(sample_type == 'Primary Tumor') %>% select(-'treatments')
-norm_tpm = tpm_dat %>% dplyr::filter(sample_type == 'Solid Tissue Normal') %>% select(-'treatments')
-mets_tpm = tpm_dat %>% dplyr::filter(sample_type == 'Metastatic') %>% select(-'treatments')
-
-write.csv(pt_tpm, 'tpm_with_clinical_data_primary_tumor.csv', row.names = FALSE)
-write.csv(norm_tpm, 'tpm_with_clinical_data_solid_tissue_normal.csv', row.names = FALSE)
-write.csv(mets_tpm, 'tpm_with_clinical_data_metastasis.csv', row.names = FALSE)
-
-```
-```{r treatment data to csv}
+lace```{r treatment data to csv}
 # Replace "TCGA-BRCA" with your project of interest
-clinical_data <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
+clinical_data <- GDCquery_clinic(project = project_name, type = "clinical")
 # View the column names to identify those related to treatment
 colnames(clinical_data)
 
@@ -269,6 +243,7 @@ treatment_data <- clinical_data[ , grepl("treatment", colnames(clinical_data))]
 # Display the treatment-related data
 head(treatment_data)
 write.csv(treatment_data, 'treatement_data.csv')
+cat("CSV files has been created for treatment data")
 ```
 
 ```{r filter_rnaseq_data}
@@ -276,78 +251,44 @@ write.csv(treatment_data, 'treatement_data.csv')
 clinical_case_ids <- clinical_data$submitter_id
 
 # Function to process and filter data
-process_and_filter_data <- function(data, clinical_case_ids) {
-  data$case_id <- substr(data$barcode, 1, 12)
-  filtered_data <- data %>%
-    filter(case_id %in% clinical_case_ids) %>%
-    group_by(case_id) %>%
-    summarise(across(starts_with("ENSG"), ~ mean(.x, na.rm = TRUE)))
-  return(filtered_data)
+process_and_filter_data <- function(data, clinical_case_ids, datatype) {
+  print_sample_counts <- function(data_type, df, st) {
+    print(paste0(st, " samples for ", data_type, " data type: ", nrow(df)))
+  }
+  
+  sts <- unique(data$sample_type)
+  for (st in sts) {
+    data <- data[data$sample_type == st, ]
+    patient_repeats <- data %>% 
+      group_by(patient) %>% 
+      summarise(N = n()) %>% 
+      ungroup()
+    
+    multiple_pat <- patient_repeats %>% filter(N > 1)
+    sgl_pat <- patient_repeats %>% filter(N == 1)
+    all_dat <- data
+    
+    if (nrow(multiple_pat) > 0) {
+      to_average <- left_join(multiple_pat, data, by = 'patient') %>% 
+        select(-N) %>% 
+        group_by(patient) %>%
+        summarise(across(starts_with("ENSG"), ~mean(.x, na.rm = TRUE))) %>%
+        ungroup()
+      sgl <- left_join(sgl_pat, data, by = 'patient')
+      all_dat <- bind_rows(to_average, sgl)
+    }
+    
+    file_name <- paste0('log2_norm_', datatype, '_clin_', gsub(' ', '_', tolower(st)), '_', str_replace_all(str_to_lower(project_name), '-', '_'), '.csv')
+    write.csv(all_dat, file_name, row.names = FALSE)
+    
+    # Print the number of samples in each category for each data type
+    print_sample_counts(data_type = datatype, df = all_dat, st = st)
+  }
 }
 
-# Process FPKM data
-fpkm_filtered <- process_and_filter_data(fpkm_dat, clinical_case_ids)
-fpkm_pt_filtered <- fpkm_filtered %>% filter(sample_type == 'Primary Tumor')
-fpkm_norm_filtered <- fpkm_filtered %>%
-filter(sample_type == 'Solid Tissue Normal')
-fpkm_mets_filtered <- fpkm_filtered %>% filter(sample_type == 'Metastatic')
-
-# Process raw counts data
-raw_counts_filtered <- process_and_filter_data(raw_counts_dat,
-clinical_case_ids)
-counts_pt_filtered <- raw_counts_filtered %>% filter(sample_type == 'Primary Tumor')
-counts_norm_filtered <- raw_counts_filtered %>% filter(sample_type == 'Solid Tissue Normal')
-counts_mets_filtered <- raw_counts_filtered %>% filter(sample_type == 'Metastatic')
-
-# Process TPM data
-tpm_filtered <- process_and_filter_data(tpm_dat, clinical_case_ids)
-tpm_pt_filtered <- tpm_filtered %>% filter(sample_type == 'Primary Tumor')
-tpm_norm_filtered <- tpm_filtered %>% 
-filter(sample_type == 'Solid Tissue Normal')
-tpm_mets_filtered <- tpm_filtered %>% filter(sample_type == 'Metastatic')
-
-# Write filtered data to CSV files
-write_filtered_data <- function(data, prefix, sample_type) {
-  write.csv(data, paste0(prefix, "_", gsub(" ", "_", tolower(sample_type)), 
-  "_filtered.csv"), row.names = FALSE)
-}
-
-# Write FPKM data
-write_filtered_data(fpkm_pt_filtered, "fpkm_uq_with_clinical_data",
-                    "Primary Tumor")
-write_filtered_data(fpkm_norm_filtered, "fpkm_uq_with_clinical_data",
-                    "Solid Tissue Normal")
-write_filtered_data(fpkm_mets_filtered, "fpkm_uq_with_clinical_data",
-                    "Metastatic")
-
-# Write raw counts data
-write_filtered_data(counts_pt_filtered,
-                    "raw_counts_with_clinical_data", "Primary Tumor")
-write_filtered_data(counts_norm_filtered,
-                    "raw_counts_with_clinical_data", "Solid Tissue Normal")
-write_filtered_data(counts_mets_filtered,
-                    "raw_counts_with_clinical_data", "Metastatic")
-
-# Write TPM data
-write_filtered_data(tpm_pt_filtered, "tpm_with_clinical_data", "Primary Tumor")
-write_filtered_data(tpm_norm_filtered,
-                    "tpm_with_clinical_data", "Solid Tissue Normal")
-write_filtered_data(tpm_mets_filtered, "tpm_with_clinical_data", "Metastatic")
-
-# Print the number of samples in each category for each data type
-print_sample_counts <- function(data_type, pt, norm, mets) {
-  cat(paste0("\nNumber of samples for ", data_type, ":\n"))
-  print(paste("Primary Tumor samples:", nrow(pt)))
-  print(paste("Solid Tissue Normal samples:", nrow(norm)))
-  print(paste("Metastatic samples:", nrow(mets)))
-}
-
-print_sample_counts("FPKM", fpkm_pt_filtered,
-                    fpkm_norm_filtered, fpkm_mets_filtered)
-print_sample_counts("Raw Counts", counts_pt_filtered,
-                    counts_norm_filtered, counts_mets_filtered)
-print_sample_counts("TPM", tpm_pt_filtered,
-                    tpm_norm_filtered, tpm_mets_filtered)
+process_and_filter_data(fpkm_dat, clinical_case_ids, 'fpkm')
+process_and_filter_data(raw_counts_dat, clinical_case_ids, 'raw_counts')
+process_and_filter_data(tpm_dat, clinical_case_ids, 'tpm')
 ```
 
 
